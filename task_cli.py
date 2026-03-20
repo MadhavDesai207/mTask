@@ -3,6 +3,9 @@ import json
 import os
 from datetime import datetime
 from tabulate import tabulate
+from argparse import ArgumentParser
+from pathlib import Path
+from typing import Callable
 
 FILE = "tasks.json"
 VALID_STATUS = ["todo", "progress", "done"]
@@ -53,7 +56,6 @@ def add_task(description):
 
     tasks.append(task)
     save_tasks(tasks)
-
     print("✅ Task added!")
 
 
@@ -127,58 +129,93 @@ def mark_status(task_id, status):
     print("❌ Task not found")
 
 
-# ---------- CLI ----------
-def show_help():
-    print("""
-📌 Task CLI Usage:
+# ---------- Command Mapping ----------
+supported_queries = {
+    "add": {
+        "help": "Add a new task",
+        "target": lambda description: add_task(description),
+        "args": [
+            {"name_or_flags": ["description"], "help": "Task description"}
+        ],
+    },
+    "list": {
+        "help": "List tasks",
+        "target": lambda status=None: list_tasks(status),
+        "args": [
+            {"name_or_flags": ["status"], "nargs": "?", "default": None, "help": "Filter by status"}
+        ],
+    },
+    "update": {
+        "help": "Update a task",
+        "target": lambda task_id, description: update_task(task_id, description),
+        "args": [
+            {"name_or_flags": ["task_id"], "help": "Task ID"},
+            {"name_or_flags": ["description"], "help": "New description"},
+        ],
+    },
+    "delete": {
+        "help": "Delete a task",
+        "target": lambda task_id: delete_task(task_id),
+        "args": [
+            {"name_or_flags": ["task_id"], "help": "Task ID"}
+        ],
+    },
+    "progress": {
+        "help": "Mark task as in progress",
+        "target": lambda task_id: mark_status(task_id, "progress"),
+        "args": [
+            {"name_or_flags": ["task_id"], "help": "Task ID"}
+        ],
+    },
+    "done": {
+        "help": "Mark task as done",
+        "target": lambda task_id: mark_status(task_id, "done"),
+        "args": [
+            {"name_or_flags": ["task_id"], "help": "Task ID"}
+        ],
+    },
+}
 
-python task_cli.py add "task description"
-python task_cli.py list
-python task_cli.py list done
-python task_cli.py update <id> "new description"
-python task_cli.py delete <id>
-python task_cli.py progress <id>
-python task_cli.py done <id>
-""")
+
+# ---------- parse_args ----------
+def parse_args() -> tuple[Callable, dict, Path]:
+    parser = ArgumentParser(description="Task CLI with argparse")
+    parser.add_argument("--db", default="~/taskly.json",
+                        help="Path to database file")
+
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    for name, props in supported_queries.items():
+        p = subparsers.add_parser(name, help=props["help"])
+        for arg in props["args"]:
+            name_or_flags = arg["name_or_flags"]
+            kwargs = {k: v for k, v in arg.items() if k != "name_or_flags"}
+            p.add_argument(*name_or_flags, **kwargs)
+
+    args = vars(parser.parse_args())
+    command = args.pop("command")
+
+    query = supported_queries[command]["target"]
+    db_path = Path(args.pop("db")).expanduser().resolve()
+
+    if db_path.is_dir():
+        parser.error(f"Database path '{db_path}' is a directory")
+
+    return query, args, db_path
 
 
+# ---------- Main ----------
 def main():
-    args = sys.argv
-
-    if len(args) < 2:
-        show_help()
-        return
-
-    command = args[1]
-
     try:
-        if command == "add":
-            add_task(" ".join(args[2:]))
+        query, args, db_path = parse_args()
 
-        elif command == "list":
-            list_tasks(args[2] if len(args) > 2 else None)
+        global FILE
+        FILE = str(db_path)
 
-        elif command == "update":
-            update_task(args[2], " ".join(args[3:]))
+        query(**args)
 
-        elif command == "delete":
-            delete_task(args[2])
-
-        elif command == "progress":
-            mark_status(args[2], "progress")
-
-        elif command == "done":
-            mark_status(args[2], "done")
-
-        elif command == "help":
-            show_help()
-
-        else:
-            print("❌ Unknown command")
-            show_help()
-
-    except IndexError:
-        print("❌ Missing arguments. Use 'help' command.")
+    except Exception as e:
+        print(f"❌ Error: {e}")
 
 
 if __name__ == "__main__":
